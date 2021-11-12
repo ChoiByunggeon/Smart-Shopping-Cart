@@ -1,0 +1,191 @@
+#include <Adafruit_NeoPixel.h>          //네오픽셀 헤더
+#include <SPI.h>                        //RFID 헤더 
+#include <MFRC522.h>                    //RFID 헤더 
+#include "HX711.h"                      //로드셀 헤더
+#include <usbhid.h>                     //바코드 헤더
+#include <usbhub.h>
+#include <hiduniversal.h>
+#include <hidboot.h>
+#include <SPI.h>
+
+
+#define calibration_factor -7050.0 
+#define DOUT  3                         //로드셀 연결
+#define CLK  2                          //로드셀 연결    
+#define led 4                           //data out이 연결된 핀 번호
+#define NUM_LEDS 12                     //네오픽셀 LED 갯수
+#define BRIGHTNESS 255                  //네오픽셀 밝기   
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, led, NEO_GRB + NEO_KHZ800); //네오픽셀 설정
+
+#define RST_PIN   6                     //reset핀은 6번으로 설정
+#define SS_PIN    7                     //SS핀은 7번으로 설정(데이터 주고 받는 핀)
+
+HX711 scale(DOUT, CLK);                 //로드셀
+                                               
+int tactSwitch = 5;                     //스위치 핀번호  
+int cnt = 0;                            //스위치 카운트 값
+int barcodeCNT = 0;
+
+boolean current_switch = LOW;           //현재 스위치 값
+boolean last_switch = HIGH;             //이전 스위치 값 
+boolean red_on = false;                 //빨간색 on/off 상태
+
+uint32_t red = strip.Color(255, 0, 0);  //네오픽셀 빨간색
+uint32_t green = strip.Color(0, 255, 0); //네오픽셀 초록색 
+
+MFRC522 mfrc(SS_PIN, RST_PIN);          //MFR522를 이용하기 위해 mfrc객체를 생성
+
+
+//바코드 리더기 관련 함수
+class MyParser : public HIDReportParser {
+  public:
+    MyParser();
+    void Parse(USBHID *hid, bool is_rpt_id, uint8_t len, uint8_t *buf);
+  protected:
+    uint8_t KeyToAscii(bool upper, uint8_t mod, uint8_t key);
+    virtual void OnKeyScanned(bool upper, uint8_t mod, uint8_t key);
+    virtual void OnScanFinished();
+};
+
+MyParser::MyParser() {}
+
+void MyParser::Parse(USBHID *hid, bool is_rpt_id, uint8_t len, uint8_t *buf) {
+  // If error or empty, return
+  if (buf[2] == 1 || buf[2] == 0) return;
+
+  for (uint8_t i = 7; i >= 2; i--) {
+    // If empty, skip
+    if (buf[i] == 0) continue;
+
+    // If enter signal emitted, scan finished
+    if (buf[i] == UHS_HID_BOOT_KEY_ENTER) {
+      OnScanFinished();
+    }
+
+    // If not, continue normally
+    else {
+      // If bit position not in 2, it's uppercase words
+      OnKeyScanned(i > 2, buf, buf[i]);
+    }
+
+    return;
+  }
+}
+
+uint8_t MyParser::KeyToAscii(bool upper, uint8_t mod, uint8_t key) {
+  // Letters
+  if (VALUE_WITHIN(key, 0x04, 0x1d)) {
+    if (upper) return (key - 4 + 'A');
+    else return (key - 4 + 'a');
+  }
+
+  // Numbers
+  else if (VALUE_WITHIN(key, 0x1e, 0x27)) {
+    return ((key == UHS_HID_BOOT_KEY_ZERO) ? '0' : key - 0x1e + '1');
+  }
+
+  return 0;
+}
+
+void MyParser::OnKeyScanned(bool upper, uint8_t mod, uint8_t key) {
+  uint8_t ascii = KeyToAscii(upper, mod, key);
+  Serial.print((char)ascii);
+}
+
+void MyParser::OnScanFinished() {
+  Serial.println(" - barcode number reading Finished");
+  barcodeCNT ++;
+}
+
+USB          Usb;
+USBHub       Hub(&Usb);
+HIDUniversal Hid(&Usb);
+MyParser     Parser;
+
+
+void setup() {
+  strip.setBrightness(BRIGHTNESS);        
+  strip.begin();                          
+  strip.show();                         //네오픽셀 초기화  
+  pinMode(tactSwitch, INPUT);
+
+  Serial.begin(9600);                   //시리얼 통신, 속도는 9600
+  SPI.begin();                          //SPI 초기화
+  mfrc.PCD_Init();
+
+  scale.set_scale(calibration_factor);  //로드셀
+  scale.tare();
+
+  if (Usb.Init() == -1) {               //바코드 연결 안 됐을 경우
+    Serial.println("OSC did not start.");
+  }
+
+  delay( 200 );
+
+  Hid.SetReportParser(0, &Parser);
+
+}
+
+void loop() {
+
+
+  Usb.Task(); //바코드 리더기 동작
+
+
+  //로드셀 코드
+  if(barcodeCNT == 1){
+    Serial.print("Weight Reading: ");
+    Serial.print(scale.get_units()*18.5, 0);
+    Serial.println(" g");
+    Serial.println();
+    barcodeCNT = 0;
+  }
+  
+
+
+  //네오픽셀 코드  
+  current_switch = digitalRead(tactSwitch);
+
+  if(last_switch == LOW && current_switch == HIGH){
+    red_on=!red_on;
+    cnt ++;
+    }
+
+  last_switch = current_switch;
+
+  if(red_on){
+       for(int i= 0; i<NUM_LEDS; i++){
+          strip.setPixelColor(i, red);
+          strip.show();
+      }
+    }
+  if(cnt == 2){
+      for(int i= 0; i<NUM_LEDS; i++){
+          strip.setPixelColor(i, green);
+          strip.show();
+      }
+     delay(3000);
+     strip.clear();
+     strip.show();
+     cnt = 0;
+    } 
+
+
+  //rfid 코드
+  
+  if ( !mfrc.PICC_IsNewCardPresent() || !mfrc.PICC_ReadCardSerial() ) {   
+                                               //태그 접촉이 되지 않았을 때, 또는 ID가 읽혀지지 않았을 때
+    delay(500);                                //0.5초 딜레이 
+    return;                                    //return
+  } 
+    
+  Serial.print("Card UID:");                   //태그의 ID출력
+  
+  for (byte i = 0; i < 4; i++) {               //태그의 ID출력하는 반복문 태그의 ID사이즈(4)까지
+    Serial.print(mfrc.uid.uidByte[i]);         //mfrc.uid.uidByte[0] ~ mfrc.uid.uidByte[3]까지 출력
+    Serial.print(" ");                         //id 사이의 간격 출력
+  }
+  Serial.println();
+  
+  
+}
