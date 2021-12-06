@@ -48,6 +48,11 @@ var cnt_man = require('./cnt_man');
 var _this = this;
 var bc = 1;
 const requestM = require('request');
+var mysqldb = require('mysql');
+var info1='n';
+var info2='m';
+var weightsum = 0;
+var addweight = 0;
 
 global.ty_list = ['1', '2', '3', '4', '5', '9', '10', '13', '14', '16', '17', '23', '24', '27', '28', '29', '30', '38', '39', '91', '92', '93', '94', '95', '96', '97', '98'];
 
@@ -467,7 +472,7 @@ function create_action(request, response, callback) {
     if (ty == '1') {
         db_sql.insert_acp(request.connection, resource_Obj[rootnm], function (err, results) {
             if (!err) {
-                callback('200');
+               callback('200');
             }
             else {
                 if (results.code == 'ER_DUP_ENTRY') {
@@ -528,31 +533,10 @@ function create_action(request, response, callback) {
         resource_Obj[rootnm].st = parseInt(request.targetObject[parent_rootnm].st, 10) + 1;
         request.targetObject[parent_rootnm].st = resource_Obj[rootnm].st;
         // db_sql.update_st(request.connection, request.targetObject[parent_rootnm], function() {
-        // }); //
-	if(request.headers['x-m2m-ri'] == 'BC') {
-		bc=resource_Obj[rootnm].con;
-		var searchurl = 'http://3.23.221.118:7579/Mobius/PRODUCT/';
-		searchurl += bc;
-		searchurl += '/cin';
-		var itemurl = 'http://3.23.221.118:7579/Mobius/userapp/item';
-		const options = {
-			uri: itemurl,
-			method: 'POST',
-			headers: {
-				'X-M2M-RI':'12345',
-               	        	'Accept': 'application/json',
-				'X-M2M-Origin': 'S',
-				'Content-Type': 'application/json;ty=4'
-			},
-			body: {
-		  		"m2m:cin": {
-        	      			"con": searchurl
-   		  		}
-			},
-			json:true
-	   }
-requestM.post(options, function(err, httpResponse, body){ });
-	}
+        // });
+	bc=resource_Obj[rootnm].con;
+	addweight=resource_Obj[rootnm].con;
+
         db_sql.insert_cin(request.connection, resource_Obj[rootnm], function (err, results) {
 		if (!err) {
                 var targetObject = JSON.parse(JSON.stringify(request.targetObject));
@@ -564,8 +548,110 @@ requestM.post(options, function(err, httpResponse, body){ });
                     targetObject = null;
                 });
                 results = null;
-                callback('200');
+		callback('200');
+		if(request.headers['x-m2m-ri'] == 'RFID' && bc == 1 ) {
+        	var db = mysqldb.createConnection({
+                	host : 'localhost',
+                	user : 'root',
+                	password : 'wjddntjd2',
+                	database : 'mobiusdb'  });
+        	db.connect();
+        var sql = 'delete from cin';
+        db.query(sql, function(err,rows){
+             if(err){
+                    console.log(err);
+            }else{
+                    console.log("success delete!");
             }
+        });
+	var itemurl = 'http://3.23.221.118:7579/Mobius/CART_A/weight_sum';
+        const options = {
+                uri: itemurl,
+                method: 'POST',
+                headers: {
+                        'X-M2M-RI':'12345',
+                        'Accept': 'application/json',
+                        'X-M2M-Origin': 'S',
+                        'Content-Type': 'application/json;ty=4'
+                        },
+                body: {
+                        "m2m:cin": {
+                                "con": "0"
+                        }
+                },
+                json:true
+        }
+        requestM.post(options, function(err, httpResponse, body){ });
+}
+		if(request.headers['x-m2m-ri'] == 'sum') {
+        var db = mysqldb.createConnection({
+                host : 'localhost',
+                user : 'root',
+                password : 'wjddntjd2',
+                database : 'mobiusdb'  });
+        db.connect();
+        var sql = "select * from cin  where pi = '/Mobius/CART_A/weight_sum'";
+        db.query(sql, function(err,rows){
+             if(err){
+                    console.log(err);
+             }else{
+                    weightsum=rows[0].con;
+		    weightsum=Number(weightsum);
+		    addweight=Number(addweight);
+	            weightsum+=addweight;
+		    weightsum=String(weightsum);
+
+	            var sql = "update cin set con = ";
+                    sql+= weightsum;
+                    sql+=" where pi = '/Mobius/CART_A/weight_sum'";
+		    console.log(sql);
+                    db.query(sql, function(err,rows){
+                    	if(err){
+                              console.log(err);
+                    	}else{
+                              console.log("success!");
+        	        }});
+                 }
+        	 });
+		}
+		if(request.headers['x-m2m-ri'] == 'BC') {
+        var db = mysqldb.createConnection({
+                host : 'localhost',
+                user : 'root',
+                password : 'wjddntjd2',
+                database : 'mobiusdb'  });
+        db.connect();
+        var sql = 'select * from product where barcode = ';
+        sql+=bc;
+        db.query(sql, function(err,rows){
+             if(err){
+                    console.log(err);
+            }else{
+                    info1=rows[0].name;
+                    info2=rows[0].price;
+	var itemurl = 'http://3.23.221.118:7579/Mobius/userapp/item';
+        const options = {
+                uri: itemurl,
+                method: 'POST',
+                headers: {
+                        'X-M2M-RI':'info',
+                        'Accept': 'application/json',
+                        'X-M2M-Origin': 'S',
+                        'Content-Type': 'application/json;ty=4'
+                        },
+                body: {
+                        "m2m:cin": {
+                                "con": {
+                                 "name": ""+info1+"",
+                                 "price": ""+info2+""
+                                }
+                        }
+                },
+                json:true
+        }
+        requestM.post(options, function(err, httpResponse, body){ });
+        }});
+	}}
             else {
                 if (results.code == 'ER_DUP_ENTRY') {
                     callback('409-5');
